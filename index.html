@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kaloritakt</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 1em;
+        margin: auto;
+        max-width: 600px;
+        line-height: 1.5;
+        background: #fafafa;
+      }
+
+      input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.4em;
+        font-size: 1em;
+        margin: 0.5em 0;
+      }
+
+      button {
+        padding: 0.5em 1em;
+        font-size: 1em;
+        margin-top: 1em;
+        display: block;
+        width: 100%;
+      }
+
+      #meals > div {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin: 0.5em 0;
+        flex-wrap: wrap;
+      }
+
+      #result {
+        margin-top: 2em;
+        background: #fff;
+        padding: 1em;
+        border-radius: 8px;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+      }
+
+      * {
+        touch-action: manipulation;
+      }
+
+      @media (max-width: 600px) {
+        h1,
+        h2,
+        p,
+        button {
+          font-size: 1rem;
+        }
+
+        input[type="number"] {
+          width: 100%;
+          margin: 0.5em 0;
+        }
+
+        #meals > div {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Kaloritakt (14 dagar)</h1>
+
+    <p>Mål: <input type="number" id="dailyGoal" value="2200" /> kcal/dag</p>
+    <p>
+      Snittförbränning:
+      <input type="number" id="dailyBurn" value="2200" /> kcal/dag
+    </p>
+
+    <input type="number" id="mealInput" placeholder="Kalorier för måltid" />
+    <button onclick="addMeal()">Logga måltid</button>
+
+    <h2>Senaste måltider:</h2>
+    <div id="meals"></div>
+
+    <div id="result"></div>
+
+    <script>
+      const logKey = "mealLog";
+      const goalKey = "dailyGoal";
+      const burnKey = "dailyBurn";
+
+      function cleanupOldMeals() {
+        const meals = JSON.parse(localStorage.getItem(logKey) || "[]");
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - 16);
+        const filtered = meals.filter((m) => new Date(m.time) >= cutoff);
+        localStorage.setItem(logKey, JSON.stringify(filtered));
+      }
+
+      function saveInputs() {
+        localStorage.setItem(
+          goalKey,
+          document.getElementById("dailyGoal").value,
+        );
+        localStorage.setItem(
+          burnKey,
+          document.getElementById("dailyBurn").value,
+        );
+      }
+
+      function addMeal() {
+        const kcal = parseInt(document.getElementById("mealInput").value);
+        if (!kcal || kcal <= 0) return;
+
+        const meals = JSON.parse(localStorage.getItem(logKey) || "[]");
+        meals.push({ time: new Date().toISOString(), kcal });
+        localStorage.setItem(logKey, JSON.stringify(meals));
+        document.getElementById("mealInput").value = "";
+        renderMeals();
+        calculate();
+      }
+
+      function renderMeals() {
+        const meals = JSON.parse(localStorage.getItem(logKey) || "[]");
+        const container = document.getElementById("meals");
+        container.innerHTML = "";
+        meals
+          .sort((a, b) => new Date(b.time) - new Date(a.time))
+          .forEach((meal) => {
+            const div = document.createElement("div");
+            const timeStr = new Date(meal.time).toLocaleString("sv-SE");
+            div.innerHTML = `
+        <span>${timeStr}</span> 
+        <strong>${meal.kcal} kcal</strong>
+        <button onclick="deleteMeal('${meal.time}')">🗑</button>
+      `;
+            container.appendChild(div);
+          });
+      }
+
+      function deleteMeal(timestamp) {
+        let meals = JSON.parse(localStorage.getItem(logKey) || "[]");
+        meals = meals.filter((m) => m.time !== timestamp);
+        localStorage.setItem(logKey, JSON.stringify(meals));
+        renderMeals();
+        calculate();
+      }
+
+      function calculate() {
+        saveInputs();
+        const meals = JSON.parse(localStorage.getItem(logKey) || "[]");
+        const goalPerDay = parseInt(document.getElementById("dailyGoal").value);
+        const burnPerDay = parseInt(document.getElementById("dailyBurn").value);
+        const now = new Date();
+        const past = new Date();
+        past.setDate(now.getDate() - 14);
+
+        // 1. Rolling surplus/deficit
+        const totalsByDate = {};
+        meals.forEach((meal) => {
+          const date = new Date(meal.time);
+          if (date >= past && date <= now) {
+            const key = date.toISOString().split("T")[0];
+            totalsByDate[key] = (totalsByDate[key] || 0) + meal.kcal;
+          }
+        });
+
+        const totalDays = Object.keys(totalsByDate).length || 1;
+        const totalConsumed = Object.values(totalsByDate).reduce(
+          (sum, val) => sum + val,
+          0,
+        );
+        const shouldHaveBurned = burnPerDay * totalDays;
+        const net = totalConsumed - shouldHaveBurned;
+
+        // 2. Real-time daily surplus tracking
+        const today = new Date().toISOString().split("T")[0];
+        const todayMeals = meals.filter((m) => m.time.startsWith(today));
+        const consumedToday = todayMeals.reduce((sum, m) => sum + m.kcal, 0);
+
+        const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes();
+        const burnedSoFar = (burnPerDay / 1440) * nowMinutes;
+        const suggestedIntake = burnedSoFar - consumedToday;
+
+        document.getElementById("result").innerHTML = `
+        <p><strong>Du bör äta nu:</strong> ${Math.max(0, suggestedIntake.toFixed(0))} kcal</p>
+        <p><strong>Förbränt hittills idag:</strong> ${burnedSoFar.toFixed(0)} kcal</p>
+        <p><strong>Ätit idag:</strong> ${consumedToday} kcal</p>
+        <hr />
+        <p><strong>Netto senaste ${totalDays} dagar:</strong> ${net >= 0 ? "+" : ""}${net.toFixed(0)} kcal</p>
+      `;
+      }
+
+      // Load saved values
+      document.getElementById("dailyGoal").value =
+        localStorage.getItem(goalKey) || "2200";
+      document.getElementById("dailyBurn").value =
+        localStorage.getItem(burnKey) || "2200";
+
+      cleanupOldMeals();
+      renderMeals();
+      calculate();
+    </script>
+  </body>
+</html>
